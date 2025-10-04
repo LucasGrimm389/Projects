@@ -1,0 +1,57 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "args": [
+                "--extensionDevelopmentPath=${workspaceFolder}"
+            ],
+            "name": "Launch Extension",
+            "outFiles": [
+                "${workspaceFolder}/out/**/*.js"
+            ],
+            "preLaunchTask": "npm",
+            "request": "launch",
+            "type": "extensionHost"
+        },
+
+
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Backend: PopModel server",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "cwd": "${workspaceFolder}/PopModel/backend",
+            "program": "${workspaceFolder}/PopModel/backend/server.js",
+            "env": {
+                "PORT": "5001"
+            }
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Frontend: PopModel (react-scripts)",
+            "cwd": "${workspaceFolder}/PopModel/frontend",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": [
+                "start"
+            ],
+            "env": {
+                "PORT": "3001"
+            }
+        }
+    ],
+    "compounds": [
+        {
+            "name": "PopModel: Backend + Frontend",
+            "configurations": [
+                "Backend: PopModel server",
+                "Frontend: PopModel (react-scripts)"
+            ]
+        }
+    ]
+}
