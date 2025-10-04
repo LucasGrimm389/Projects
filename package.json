@@ -10,14 +10,15 @@
   },
   "scripts": {
     "ports:free": "kill-port 3000 3001 5000 5001 || true",
-  "start": "concurrently -n backend,frontend -c blue,green \"PORT=5001 npm start --prefix ./PopModel/backend\" \"NODE_OPTIONS=--no-deprecation PORT=3000 BROWSER=none npm start --prefix ./PopModel/frontend\"",
-  "start:auto": "npm run ports:free && concurrently -n backend,frontend -c blue,green \"PORT=5001 npm start --prefix ./PopModel/backend\" \"NODE_OPTIONS=--no-deprecation PORT=3000 npm start --prefix ./PopModel/frontend\"",
+  "start": "concurrently -n backend,frontend -c blue,green \"PORT=5001 npm run backend:prepare && npm start --prefix ./PopModel/backend\" \"NODE_OPTIONS=--no-deprecation PORT=3000 BROWSER=none npm start --prefix ./PopModel/frontend\"",
+  "start:auto": "npm run ports:free && concurrently -n backend,frontend -c blue,green \"PORT=5001 npm run backend:prepare && npm start --prefix ./PopModel/backend\" \"NODE_OPTIONS=--no-deprecation PORT=3000 npm start --prefix ./PopModel/frontend\"",
     "build:frontend": "npm --prefix ./PopModel/frontend run build",
     "start:single": "npm run build:frontend && node ./PopModel/backend/server.js",
   "start:single:8080": "PORT=8080 npm run build:frontend && PORT=8080 node ./PopModel/backend/server.js",
     "backend:stop": "fuser -k 5001/tcp || true",
+    "backend:prepare": "npm --prefix ./PopModel/backend ci || npm --prefix ./PopModel/backend install",
     "backend:start": "PORT=5001 npm start --prefix ./PopModel/backend",
-    "backend:restart": "npm run backend:stop && npm run backend:start",
+    "backend:restart": "npm run backend:stop && npm run backend:prepare && npm run backend:start",
     "start:clean": "npm run ports:free && npm start",
     "stop": "npm run ports:free"
   }

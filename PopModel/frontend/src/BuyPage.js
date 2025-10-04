@@ -3,9 +3,9 @@ import React from 'react';
 export default function BuyPage() {
   return (
     <div style={{ padding: 24 }}>
-      <h1>Get pop.ai model 2</h1>
+      <h1>Get pop v2</h1>
       <p>
-        Unlock higher quality and better performance with pop.ai model 2 (Claude 3.5 Sonnet).
+        Unlock higher quality and better performance with pop v2.
       </p>
       <ul>
         <li>Best for writing and complex reasoning</li>

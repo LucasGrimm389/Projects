@@ -294,27 +294,9 @@ function App() {
                     <button
                       className="pm-nav-btn"
                       style={{ fontSize: '0.9em', padding: '8px 12px' }}
-                      title="Export JSON"
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        try {
-                          const res = await fetch(`/api/history/${s.id}`, { headers: authHeaders() });
-                          if (res.ok) {
-                            const data = await res.json();
-                            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            const base = (s.title || s.id || 'chat').replace(/[^a-z0-9-_]+/gi, '_').slice(0, 50);
-                            a.download = `${base}.json`;
-                            document.body.appendChild(a);
-                            a.click();
-                            a.remove();
-                            URL.revokeObjectURL(url);
-                          }
-                        } catch {}
-                      }}
-                    >⬇️ Export</button>
+                      title="Rename"
+                      onClick={() => { setRenaming(true); setActiveSession(s.id); setTitleInput(s.title || ''); }}
+                    >✏️ Rename</button>
                     <button
                       className="pm-nav-btn"
                       style={{ fontSize: '0.9em', padding: '8px 12px' }}
@@ -384,65 +366,8 @@ function App() {
         }}
       >
         <Routes>
-          <Route path="/" element={
-            <>
-              <div className="pm-header">
-                <span>pop.ai</span>
-                <span style={{ marginLeft: 8 }} className="pm-badge">{(() => {
-                  const m = availableModels.find(x => x.id === currentModel);
-                  const label = m?.label || currentModel;
-                  if (/model 1\.5/i.test(label)) return 'pop v1.5';
-                  if (/model 2/i.test(label)) return 'pop v2';
-                  return label || 'model';
-                })()}</span>
-                {adminToken && <span className="pm-badge pm-badge-admin" title="Admin">Admin</span>}
-              </div>
-              <div className="pm-chat-messages">
-                {messages.map((msg, idx) => (
-                  <div key={idx} className={msg.sender === 'popmodel' ? 'popmodel-message' : 'user-message'}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeHighlight, rehypeKatex]} components={renderers}>
-                      {msg.text || ''}
-                    </ReactMarkdown>
-                  </div>
-                ))}
-                {loading && <div className="popmodel-message loading">Thinking...</div>}
-              </div>
-              <div className="pm-chat-input">
-                <input
-                  type="text"
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  placeholder="Type your message..."
-                  onKeyDown={e => e.key === 'Enter' && sendMessage()}
-                />
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={async (e) => {
-                    const files = Array.from(e.target.files || []);
-                    const next = [];
-                    for (const f of files) {
-                      const dataUrl = await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsDataURL(f); });
-                      next.push({ dataUrl });
-                    }
-                    setPendingImages(next);
-                  }}
-                  style={{ maxWidth: 220 }}
-                />
-                <button onClick={sendMessage} disabled={loading}>Send</button>
-              </div>
-              {pendingImages.length > 0 && (
-                <div className="pm-attachments" style={{ display: 'flex', gap: 6, padding: '0 16px 12px', flexWrap: 'wrap' }}>
-                  {pendingImages.map((img, i) => (
-                    <img key={i} src={img.dataUrl} alt={`preview-${i}`} style={{ maxHeight: 80, borderRadius: 6, border: '1px solid #e5e7eb' }} />
-                  ))}
-                  <button className="pm-mini-btn" onClick={() => setPendingImages([])}>Clear</button>
-                </div>
-              )}
-            </>
-          }/>
-          <Route path="/v2" element={<AIChatInterface authHeaders={authHeaders} onAdminRequested={promptAdminLogin} />} />
+          {/* Classic UI removed per request; only Tailwind UI at '/' */}
+          <Route path="/" element={<AIChatInterface authHeaders={authHeaders} onAdminRequested={promptAdminLogin} />} />
           <Route path="/history" element={
             <HistoryPage
               sessions={sessions}
@@ -609,24 +534,6 @@ function HistoryPage({ sessions, authHeaders, reloadSessions, openSession, onClo
                 {s.updatedAt && <div className="pm-history-sub">{new Date(s.updatedAt).toLocaleString()}</div>}
               </button>
               <div style={{ display: 'inline-flex', gap: 8 }}>
-                <button className="pm-history-delete" disabled={busy} onClick={async () => {
-                  try {
-                    const res = await fetch(`/api/history/${s.id}`, { headers: authHeaders() });
-                    if (res.ok) {
-                      const data = await res.json();
-                      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      const base = (s.title || s.id || 'chat').replace(/[^a-z0-9-_]+/gi, '_').slice(0, 50);
-                      a.download = `${base}.json`;
-                      document.body.appendChild(a);
-                      a.click();
-                      a.remove();
-                      URL.revokeObjectURL(url);
-                    }
-                  } catch {}
-                }} title="Export">⬇️</button>
                 <button className="pm-history-delete" disabled={busy} onClick={() => handleDelete(s.id)} title="Delete">🗑️</button>
               </div>
             </li>

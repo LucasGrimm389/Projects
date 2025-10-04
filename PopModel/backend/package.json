@@ -12,6 +12,7 @@
     "express": "^4.18.2",
     "express-rate-limit": "^7.5.1",
     "google-auth-library": "^9.15.1",
-    "spellchecker": "^3.7.0"
+    "spellchecker": "^3.7.0",
+    "gtts": "^0.2.1"
   }
 }

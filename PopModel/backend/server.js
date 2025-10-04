@@ -6,6 +6,8 @@ const spellchecker = require('spellchecker');
 const axios = require('axios');
 
 const app = express();
+// In dev behind proxies (CRA), trust 'X-Forwarded-*' so rate limiting identifies clients correctly
+app.set('trust proxy', 1);
 app.use(bodyParser.json({ limit: '25mb' }));
 
 const POPMODEL_API_URL = 'https://api.anthropic.com/v1/messages';
@@ -13,6 +15,10 @@ const POPMODEL_API_KEY = process.env.POPMODEL_API_KEY || process.env.CLAUDE_API_
 const fs = require('fs');
 const path = require('path');
 const { OAuth2Client } = require('google-auth-library');
+let gTTS;
+try { gTTS = require('gtts'); } catch (e) {
+  console.warn('gTTS not installed; /api/tts will be unavailable. Install by running `npm install gtts` in backend.');
+}
 const CONFIG_PATH = path.join(__dirname, 'popmodel.config.json');
 const DATA_DIR = path.join(__dirname, 'data');
 const HISTORY_DIR = path.join(DATA_DIR, 'history');
@@ -463,6 +469,32 @@ app.post('/api/memory/clear', requireAuth, (req, res) => {
   }
 });
 
+// Text-to-Speech endpoint (streams MP3)
+app.post('/api/tts', async (req, res) => {
+  try {
+    if (!gTTS) return res.status(503).json({ error: 'tts_unavailable', message: 'Server TTS not available' });
+    const { text, lang } = req.body || {};
+    const t = typeof text === 'string' ? text.trim() : '';
+    if (!t) return res.status(400).json({ error: 'invalid_text', message: 'Provide non-empty text' });
+    // Limit size to avoid abuse
+    if (t.length > 2000) return res.status(400).json({ error: 'text_too_long', message: 'Max 2000 characters' });
+    const language = typeof lang === 'string' && lang.length <= 10 ? lang : 'en';
+    const voice = new gTTS(t, language);
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Disposition', 'attachment; filename="speech.mp3"');
+    const stream = voice.stream();
+    stream.on('error', (err) => {
+      console.error('gTTS stream error:', err?.message || err);
+      if (!res.headersSent) res.status(500).json({ error: 'tts_failed', message: 'TTS stream error' });
+      try { res.end(); } catch {}
+    });
+    stream.pipe(res);
+  } catch (e) {
+    console.error('TTS error:', e?.message || e);
+    res.status(500).json({ error: 'tts_failed', message: e?.message || 'Unknown error' });
+  }
+});
+
 // Simple health check
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -478,20 +510,22 @@ app.get('/api/config', (_req, res) => {
   });
 });
 
-// Recommended models (static list)
+// Recommended models (static list) - constrain to exactly three with friendly names
 const MODEL_LABELS = [
-  { id: 'claude-3-opus-20240229', label: 'pop.ai model 1.5' },
-  { id: 'claude-3-5-sonnet-latest', label: 'pop.ai model 2 (payment)' }
+  { id: 'claude-3-haiku-20240307', label: 'pop v1' },
+  { id: 'claude-3-sonnet-20240229', label: 'pop v1.5' },
+  { id: 'claude-3-5-sonnet-latest', label: 'pop v2' }
 ];
 
 app.get('/api/models', (_req, res) => {
-  // Start from labeled list and ensure CURRENT_MODEL is present
-  const ids = new Set(MODEL_LABELS.map(m => m.id));
-  const list = [...MODEL_LABELS];
-  if (!ids.has(CURRENT_MODEL)) {
-    list.unshift({ id: CURRENT_MODEL, label: `${CURRENT_MODEL} (current)` });
+  // Only return our three whitelisted models
+  const allowedIds = new Set(MODEL_LABELS.map(m => m.id));
+  if (!allowedIds.has(CURRENT_MODEL)) {
+    // Reset to default allowed model if persisted model is no longer allowed
+    CURRENT_MODEL = MODEL_LABELS[0].id;
+    try { fs.writeFileSync(CONFIG_PATH, JSON.stringify({ model: CURRENT_MODEL }, null, 2)); } catch {}
   }
-  res.json({ models: list });
+  res.json({ models: MODEL_LABELS });
 });
 
 // Update model at runtime
@@ -502,10 +536,14 @@ app.post('/api/config/model', (req, res) => {
   }
   // Allow passing label instead of id
   const byLabel = MODEL_LABELS.find(m => m.label.toLowerCase() === model.trim().toLowerCase());
-  if (byLabel) {
-    model = byLabel.id;
+  if (byLabel) model = byLabel.id;
+  model = model.trim();
+  // Constrain to allowed list only
+  const allowedIds = new Set(MODEL_LABELS.map(m => m.id));
+  if (!allowedIds.has(model)) {
+    return res.status(400).json({ error: 'Unsupported model', allowed: MODEL_LABELS });
   }
-  CURRENT_MODEL = model.trim();
+  CURRENT_MODEL = model;
   // Persist selection
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify({ model: CURRENT_MODEL }, null, 2));
