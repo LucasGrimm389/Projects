@@ -1,14 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Routes, Route, Link, useNavigate } from 'react-router-dom';
+import { Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom';
 import BuyPage from './BuyPage';
+import AIChatInterface from './AIChatInterface';
 import './App.css';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
 import 'highlight.js/styles/github.css';
+import 'katex/dist/katex.min.css';
 
 function App() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [messages, setMessages] = useState([
     { sender: 'popmodel', text: 'Hello! I am pop.ai, your assistant. How can I help you today?' }
   ]);
@@ -31,9 +36,7 @@ function App() {
   const [renaming, setRenaming] = useState(false);
   const [titleInput, setTitleInput] = useState('');
   // Generation controls
-  const [temperature, setTemperature] = useState(0.2);
-  const [maxTokens, setMaxTokens] = useState(1024);
-  const [systemPrompt, setSystemPrompt] = useState('');
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'normal');
 
   useEffect(() => {
     // Load current config on mount
@@ -70,6 +73,14 @@ function App() {
     loadConfig();
     loadModels();
   }, []);
+
+  // Apply theme to document
+  useEffect(() => {
+    const cls = `theme-${theme}`;
+    document.body.classList.remove('theme-normal', 'theme-light', 'theme-dark');
+    document.body.classList.add(cls);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
 
   // Initialize Google Sign-In (retry until script loads)
   const gsiInitRef = useRef(false);
@@ -152,7 +163,7 @@ function App() {
       const res = await fetch('/api/message', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ message: userText, sessionId: activeSession, images: pendingImages, temperature, maxTokens, system: systemPrompt })
+        body: JSON.stringify({ message: userText, sessionId: activeSession, images: pendingImages })
       });
 
       const contentType = res.headers.get('content-type') || '';
@@ -170,6 +181,18 @@ function App() {
       if (!activeSession && data.sessionId) {
         setActiveSession(data.sessionId);
         loadHistory();
+        // Auto-title the chat based on the first user message
+        const titleBase = (userText || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+        if (titleBase) {
+          try {
+            await fetch(`/api/history/${data.sessionId}/rename`, {
+              method: 'POST',
+              headers: authHeaders(),
+              body: JSON.stringify({ title: titleBase })
+            });
+            setTitleInput(titleBase);
+          } catch {}
+        }
       }
       setMessages(msgs => [...msgs, { sender: 'popmodel', text: (data.admin ? '[ADMIN] ' : '') + (data.reply || 'PopModel response error.') }]);
     } catch (err) {
@@ -222,7 +245,7 @@ function App() {
     <div className="pm-root">
       <aside className={`pm-sidebar${sidebarOpen ? '' : ' closed'}`}>
   <div className="pm-logo">pop.ai</div>
-        <nav className="pm-nav">
+  <nav className="pm-nav">
           <button className="pm-nav-btn" onClick={async () => {
             try {
               const res = await fetch('/api/history/new', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ title: 'New chat' }) });
@@ -234,7 +257,7 @@ function App() {
               }
             } catch {}
           }}>New Chat</button>
-          <button className="pm-nav-btn" onClick={loadHistory}>History</button>
+          <button className="pm-nav-btn" onClick={() => navigate('/history')}>History</button>
           <button className="pm-nav-btn" onClick={() => setSettingsOpen(true)}>Settings</button>
           <Link className="pm-nav-btn" to="/buy">Buy pop.ai</Link>
           <div style={{ padding: '8px' }}>
@@ -261,21 +284,73 @@ function App() {
                       }
                     } catch {}
                   }}>{s.title || s.id}</button>
-                  <button
-                    className="pm-nav-btn"
-                    style={{ fontSize: '0.9em', padding: '8px 12px', marginLeft: 6 }}
-                    title="Rename"
-                    onClick={() => { setRenaming(true); setActiveSession(s.id); setTitleInput(s.title || ''); }}
-                  >✏️ Rename</button>
+                  <div style={{ display: 'inline-flex', gap: 6, marginLeft: 6 }}>
+                    <button
+                      className="pm-nav-btn"
+                      style={{ fontSize: '0.9em', padding: '8px 12px' }}
+                      title="Rename"
+                      onClick={() => { setRenaming(true); setActiveSession(s.id); setTitleInput(s.title || ''); }}
+                    >✏️ Rename</button>
+                    <button
+                      className="pm-nav-btn"
+                      style={{ fontSize: '0.9em', padding: '8px 12px' }}
+                      title="Export JSON"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        try {
+                          const res = await fetch(`/api/history/${s.id}`, { headers: authHeaders() });
+                          if (res.ok) {
+                            const data = await res.json();
+                            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            const base = (s.title || s.id || 'chat').replace(/[^a-z0-9-_]+/gi, '_').slice(0, 50);
+                            a.download = `${base}.json`;
+                            document.body.appendChild(a);
+                            a.click();
+                            a.remove();
+                            URL.revokeObjectURL(url);
+                          }
+                        } catch {}
+                      }}
+                    >⬇️ Export</button>
+                    <button
+                      className="pm-nav-btn"
+                      style={{ fontSize: '0.9em', padding: '8px 12px' }}
+                      title="Delete chat"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (!confirm('Delete this chat permanently?')) return;
+                        try {
+                          const res = await fetch(`/api/history/${s.id}`, { method: 'DELETE', headers: authHeaders() });
+                          if (res.ok) {
+                            setSessions(ss => ss.filter(x => x.id !== s.id));
+                            if (activeSession === s.id) {
+                              setActiveSession(null);
+                              setMessages([{ sender: 'popmodel', text: 'Chat deleted.' }]);
+                            }
+                          }
+                        } catch {}
+                      }}
+                    >🗑️ Delete</button>
+                  </div>
                 </li>
               ))}
             </ul>
+            <div style={{ display: 'flex', gap: 8, paddingTop: 8 }}>
+              <button className="pm-nav-btn" onClick={async () => {
+                if (!confirm('Clear ALL chats? This cannot be undone.')) return;
+                try { const res = await fetch('/api/history/clear', { method: 'POST', headers: authHeaders() }); if (res.ok) { setSessions([]); setActiveSession(null); setMessages([{ sender: 'popmodel', text: 'All chats cleared.' }]); } } catch {}
+              }}>Clear All</button>
+            </div>
           </div>
         </nav>
         <div className="pm-sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
           {sidebarOpen ? '<' : '>'}
         </div>
-      </aside>
+  </aside>
+      {/* Hide the sidebar on the History page for a clean full-page view */}
       <main
         className="pm-main"
         onPaste={async (e) => {
@@ -313,13 +388,19 @@ function App() {
             <>
               <div className="pm-header">
                 <span>pop.ai</span>
-                <span style={{ marginLeft: 8 }} className="pm-badge">{currentModel || 'model'}</span>
+                <span style={{ marginLeft: 8 }} className="pm-badge">{(() => {
+                  const m = availableModels.find(x => x.id === currentModel);
+                  const label = m?.label || currentModel;
+                  if (/model 1\.5/i.test(label)) return 'pop v1.5';
+                  if (/model 2/i.test(label)) return 'pop v2';
+                  return label || 'model';
+                })()}</span>
                 {adminToken && <span className="pm-badge pm-badge-admin" title="Admin">Admin</span>}
               </div>
               <div className="pm-chat-messages">
                 {messages.map((msg, idx) => (
                   <div key={idx} className={msg.sender === 'popmodel' ? 'popmodel-message' : 'user-message'}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={renderers}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeHighlight, rehypeKatex]} components={renderers}>
                       {msg.text || ''}
                     </ReactMarkdown>
                   </div>
@@ -361,6 +442,31 @@ function App() {
               )}
             </>
           }/>
+          <Route path="/v2" element={<AIChatInterface authHeaders={authHeaders} onAdminRequested={promptAdminLogin} />} />
+          <Route path="/history" element={
+            <HistoryPage
+              sessions={sessions}
+              authHeaders={authHeaders}
+              reloadSessions={loadHistory}
+              openSession={async (sid) => {
+                try {
+                  const res = await fetch(`/api/history/${sid}`, { headers: authHeaders() });
+                  if (res.ok) {
+                    const data = await res.json();
+                    setActiveSession(data.id);
+                    const restored = (data.messages || []).map(m => ({ sender: m.role === 'assistant' ? 'popmodel' : 'user', text: (m.admin ? '[ADMIN] ' : '') + m.text }));
+                    setMessages(restored.length ? restored : [{ sender: 'popmodel', text: 'Loaded chat.' }]);
+                    setTitleInput(data.title || '');
+                    navigate('/');
+                  }
+                } catch {}
+              }}
+              onClose={() => {
+                if (window.history.length > 1) navigate(-1);
+                else navigate('/');
+              }}
+            />
+          } />
           <Route path="/buy" element={<BuyPage />} />
         </Routes>
       </main>
@@ -380,17 +486,12 @@ function App() {
               <div className="pm-note">Current: {currentModel || 'unknown'}</div>
               <hr />
               <label className="pm-field">
-                <span>Temperature</span>
-                <input type="range" min="0" max="1" step="0.05" value={temperature} onChange={e => setTemperature(parseFloat(e.target.value))} />
-                <span style={{ width: 36, textAlign: 'right' }}>{temperature.toFixed(2)}</span>
-              </label>
-              <label className="pm-field">
-                <span>Max tokens</span>
-                <input type="number" min="128" max="4096" value={maxTokens} onChange={e => setMaxTokens(parseInt(e.target.value || '0', 10) || 1024)} />
-              </label>
-              <label className="pm-field" style={{ alignItems: 'flex-start' }}>
-                <span>System</span>
-                <textarea rows={3} style={{ flex: 1 }} placeholder="Optional system prompt (tone/instructions)" value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)} />
+                <span>Theme</span>
+                <select value={theme} onChange={e => setTheme(e.target.value)}>
+                  <option value="normal">Normal</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
               </label>
             </div>
             <div className="pm-modal-footer">
@@ -457,3 +558,81 @@ function App() {
 }
 
 export default App;
+
+// Full-screen History page component
+function HistoryPage({ sessions, authHeaders, reloadSessions, openSession, onClose }) {
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { reloadSessions(); }, []); // load sessions on mount
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this chat? This cannot be undone.')) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/history/${id}`, { method: 'DELETE', headers: authHeaders() });
+      if (res.ok) {
+        await reloadSessions();
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (!confirm('Clear ALL chats? This cannot be undone.')) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/history/clear', { method: 'POST', headers: authHeaders() });
+      if (res.ok) await reloadSessions();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="pm-history-root">
+      <div className="pm-history-header">
+        <div className="pm-history-title">History</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button className="pm-history-delete" disabled={busy} onClick={handleClearAll} title="Clear all">Clear All</button>
+          <button className="pm-history-close" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+      </div>
+      <div className="pm-history-list">
+        {(sessions || []).length === 0 && (
+          <div className="pm-history-empty">No chats yet.</div>
+        )}
+        <ul>
+          {sessions.map(s => (
+            <li key={s.id} className="pm-history-item">
+              <button className="pm-history-open" onClick={() => openSession(s.id)} title={s.title || s.id}>
+                <div className="pm-history-title-text">{s.title || s.id}</div>
+                {s.updatedAt && <div className="pm-history-sub">{new Date(s.updatedAt).toLocaleString()}</div>}
+              </button>
+              <div style={{ display: 'inline-flex', gap: 8 }}>
+                <button className="pm-history-delete" disabled={busy} onClick={async () => {
+                  try {
+                    const res = await fetch(`/api/history/${s.id}`, { headers: authHeaders() });
+                    if (res.ok) {
+                      const data = await res.json();
+                      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      const base = (s.title || s.id || 'chat').replace(/[^a-z0-9-_]+/gi, '_').slice(0, 50);
+                      a.download = `${base}.json`;
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      URL.revokeObjectURL(url);
+                    }
+                  } catch {}
+                }} title="Export">⬇️</button>
+                <button className="pm-history-delete" disabled={busy} onClick={() => handleDelete(s.id)} title="Delete">🗑️</button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}

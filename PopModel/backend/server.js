@@ -16,8 +16,10 @@ const { OAuth2Client } = require('google-auth-library');
 const CONFIG_PATH = path.join(__dirname, 'popmodel.config.json');
 const DATA_DIR = path.join(__dirname, 'data');
 const HISTORY_DIR = path.join(DATA_DIR, 'history');
+const MEMORY_DIR = path.join(DATA_DIR, 'memory');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 if (!fs.existsSync(HISTORY_DIR)) fs.mkdirSync(HISTORY_DIR);
+if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR);
 const DEFAULT_MODEL = process.env.POPMODEL_MODEL || 'claude-3-opus-20240229';
 let CURRENT_MODEL = DEFAULT_MODEL;
 
@@ -87,6 +89,76 @@ function userDir(userKey) {
   const dir = path.join(HISTORY_DIR, userKey);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+function memoryPath(userKey) {
+  return path.join(MEMORY_DIR, `${userKey}.json`);
+}
+function readMemory(userKey) {
+  try {
+    const fp = memoryPath(userKey);
+    if (!fs.existsSync(fp)) return { notes: [], name: null, updatedAt: 0 };
+    const j = JSON.parse(fs.readFileSync(fp, 'utf-8'));
+    if (!Array.isArray(j.notes)) j.notes = [];
+    return j;
+  } catch {
+    return { notes: [], name: null, updatedAt: 0 };
+  }
+}
+function writeMemory(userKey, mem) {
+  try {
+    const fp = memoryPath(userKey);
+    fs.writeFileSync(fp, JSON.stringify(mem, null, 2));
+  } catch {}
+}
+function updateMemoryFromText(userKey, text) {
+  try {
+    const t = (text || '').trim();
+    if (!t) return;
+    const mem = readMemory(userKey);
+    // Clear memory commands
+    if (/\b(clear|reset) (my )?memory\b/i.test(t)) {
+      writeMemory(userKey, { notes: [], name: null, updatedAt: Date.now() });
+      return;
+    }
+    if (/\bforget (my )?name\b/i.test(t)) {
+      mem.name = null;
+      mem.updatedAt = Date.now();
+      writeMemory(userKey, mem);
+      return;
+    }
+    // Extract name: "my name is X" or "call me X"
+    const m1 = t.match(/\bmy name is\s+([a-zA-Z][\w\-']{1,40})\b/i) || t.match(/\bcall me\s+([a-zA-Z][\w\-']{1,40})\b/i);
+    if (m1) {
+      mem.name = m1[1];
+      mem.updatedAt = Date.now();
+      writeMemory(userKey, mem);
+      return;
+    }
+    // "remember that ..." capture short note
+    const m2 = t.match(/\bremember that\s+(.{5,200})$/i);
+    if (m2) {
+      const note = m2[1].trim();
+      if (note && !mem.notes.includes(note)) {
+        mem.notes.push(note);
+        // Cap notes length
+        if (mem.notes.length > 20) mem.notes = mem.notes.slice(-20);
+        mem.updatedAt = Date.now();
+        writeMemory(userKey, mem);
+      }
+      return;
+    }
+    // Preferences: "I like ..." simple heuristic
+    const m3 = t.match(/\bI like\s+(.{3,80})$/i);
+    if (m3) {
+      const pref = `pref: ${m3[1].trim()}`;
+      if (!mem.notes.includes(pref)) {
+        mem.notes.push(pref);
+        if (mem.notes.length > 20) mem.notes = mem.notes.slice(-20);
+        mem.updatedAt = Date.now();
+        writeMemory(userKey, mem);
+      }
+    }
+  } catch {}
 }
 function listSessions(userKey) {
   const dir = userDir(userKey);
@@ -205,6 +277,18 @@ app.post('/api/message', messageLimiter, requireAuth, async (req, res) => {
       systemPrompt = [adminHeader, userSystem].filter(Boolean).join('\n\n');
     }
 
+    // Lightweight user memory: include context in system prompt
+    const userKey = getUserKey(req);
+    const mem = readMemory(userKey);
+    if ((mem.name || (mem.notes && mem.notes.length))) {
+      const memText = [
+        mem.name ? `User name: ${mem.name}` : null,
+        mem.notes && mem.notes.length ? `Notes: ${mem.notes.join('; ')}` : null,
+      ].filter(Boolean).join('\n');
+      const memHeader = 'Use the following persistent user memory to personalize responses when helpful. Do not assume facts beyond this.';
+      systemPrompt = [systemPrompt, memHeader, memText].filter(Boolean).join('\n\n');
+    }
+
     // Build content with optional images
     const content = [];
     if (safeText && safeText.trim()) content.push({ type: 'text', text: safeText });
@@ -265,7 +349,7 @@ app.post('/api/message', messageLimiter, requireAuth, async (req, res) => {
       const reply = response.data.content?.[0]?.text || 'No response.';
       // Save to history; auto-create session if none provided
       try {
-        const key = getUserKey(req);
+        const key = userKey;
         let sid = sessionId;
         let s;
         if (!sid) {
@@ -273,11 +357,21 @@ app.post('/api/message', messageLimiter, requireAuth, async (req, res) => {
           sid = s.id;
         } else {
           s = loadSession(key, sid) || createSession(key, 'Chat');
+          // If this looks like a fresh session (no messages yet), auto-title from first user text
+          try {
+            const isFresh = !Array.isArray(s.messages) || s.messages.length === 0;
+            const isGenericTitle = typeof s.title !== 'string' || /^(new chat|chat)$/i.test(String(s.title).trim());
+            if (safeText && safeText.trim() && (isFresh || isGenericTitle)) {
+              s.title = safeText.trim().slice(0, 80);
+            }
+          } catch {}
         }
         s.messages.push({ role: 'user', text: safeText, ts: Date.now(), images: Array.isArray(images) ? images.map(i => ({ url: i.url, hasData: !!i.dataUrl })) : undefined });
         s.messages.push({ role: 'assistant', text: reply, ts: Date.now(), admin });
         s.updatedAt = Date.now();
         saveSession(key, s);
+        // Update memory from the user text
+        updateMemoryFromText(key, safeText);
         sessionId = sid;
       } catch {}
       return res.json({ reply, admin, sessionId });
@@ -355,6 +449,17 @@ app.post('/api/history/clear', requireAuth, (req, res) => {
     return res.json({ ok: true, cleared: files.length });
   } catch (e) {
     return res.status(500).json({ error: 'clear_failed', message: e.message });
+  }
+});
+
+// Clear user memory
+app.post('/api/memory/clear', requireAuth, (req, res) => {
+  const key = getUserKey(req);
+  try {
+    writeMemory(key, { notes: [], name: null, updatedAt: Date.now() });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'clear_memory_failed', message: e.message });
   }
 });
 
